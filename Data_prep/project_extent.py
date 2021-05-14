@@ -60,7 +60,7 @@ class SetExtent:
         Returns
         -------
         out_geo_poly: shp
-            rectangular shape of the extent
+            rectangular vector shape of the extent
         """
         shape_file = self.shp
         bounds = shape_file.total_bounds
@@ -90,7 +90,7 @@ class SetExtent:
         Returns
         -------
         extended: shp
-            rectangular shape of the extent with the designated buffer
+            rectangular vector shape of the extent with the designated buffer
         """
 
         buffered_shp = self.create_buffer(buffer_distance)
