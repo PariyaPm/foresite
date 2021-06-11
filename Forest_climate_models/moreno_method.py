@@ -425,3 +425,4 @@ if __name__ == '__main__':
         extent_out='Extent/buffered_extent.tif')
     raster_extent(boundary='Extent/extent.shp',
         extent_out='Extent/extent.tif')
+    
