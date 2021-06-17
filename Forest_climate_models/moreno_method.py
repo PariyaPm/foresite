@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 
-"""project_extent: this code creates an extent from the boundary, it includes
-    functions for creating buffer and creating the extent with and without
-    buffer
+"""moreno_method: this code creates analyzes the climate forest structure
+relationships
 """
 
 __author__ = "Pariya Pourmohammadi"
@@ -12,417 +11,551 @@ __version__ = "01.0"
 __maintainer__ = "Pariya Pourmohammadi"
 __email__ = "ppourmohammadi@ucmerced.edu"
 __status__ = "Draft"
-#!/usr/bin/env python
 
-"""project_extent: this code creates an extent from the boundary, it includes
-    functions for creating buffer and creating the extent with and without
-    buffer
-"""
-
-__author__ = "Pariya Pourmohammadi"
-__date__ = "05/06/2021"
-__credits__ = ["Pariya Pourmohammadi"]
-__version__ = "01.0"
-__maintainer__ = "Pariya Pourmohammadi"
-__email__ = "ppourmohammadi@ucmerced.edu"
-__status__ = "Finalized"
-
-import os
+import sys
 import geopandas as gpd
-from geopandas import GeoSeries
-from shapely.geometry import Polygon
+import matplotlib.pyplot as plt
 import rioxarray as rxr
-from shapely.geometry import mapping
 import rasterio as rio
-from rasterio.features import rasterize
-from rasterio.transform import from_bounds
-import affine
-from rasterio.warp import reproject, Resampling, aligned_target
+import gc
+import pandas as pd
 import numpy as np
+import os
+from glob import glob
 
+sys.path.append('Data_prep')
 
-class SetExtent:
-    """ SetExtent includes creates extent shapefiles
-    Attributes
-    ----------
-    shp: shapefile
-        the boundary shapefile
+import project_extent as pe
+
+# TODO add the params
+# TODO  complete the code documentation
+
+def read_raster_array(raster_file):
     """
 
-    def __init__(self, shp=None):
-        self.shp = shp
-        self.crs = None
-
-
-    def create_buffer(self, buffer_distance=10000):
-        """
-        Parameters
-        ----------
-        buffer_distance: num
-            distance of buffer
-
-        Returns
-        -------
-        buffered: shp
-            buffered shapefile
-        """
-        buffered = self.shp.buffer(buffer_distance)
-        return buffered
-
-
-    def create_extent(self, epsg=3310):
-        """
-
-        Parameters
-        ----------
-        epsg: int optional
-            espg of the projection scr, if this is not identified the
-            projection of out file will be the same as infile
-
-        Returns
-        -------
-        out_geo_poly: shp
-            rectangular vector shape of the extent
-        """
-        shape_file = self.shp
-        bounds = shape_file.total_bounds
-        new_poly = Polygon([(bounds[0], bounds[1]),
-                            (bounds[2], bounds[1]),
-                            (bounds[2], bounds[3]),
-                            (bounds[0], bounds[3])])
-        geo_poly = GeoSeries([new_poly])
-        if epsg is None:
-            epsg = self.crs
-        out_geo_poly = geo_poly.set_crs(epsg=epsg)
-
-        return out_geo_poly
-
-
-    def create_buffered_extent(self, buffer_distance, epsg=None):
-        """
-
-        Parameters
-        ----------
-        buffer_distance: num
-            distance of buffer
-        epsg: int, optional
-            espg of the projection scr, if this is not identified the
-            projection of out file will be the same as infile
-
-        Returns
-        -------
-        extended: shp
-            rectangular vector shape of the extent with the designated buffer
-        """
-
-        buffered_shp = self.create_buffer(buffer_distance)
-        if epsg is None:
-            epsg = self.crs
-        buffered = SetExtent(buffered_shp)
-        extended = buffered.create_extent(epsg)
-        return extended
-
-
-def project_file(area, ref=None, epsg=None):
-    """
     Parameters
     ----------
-    area
-    ref
-    epsg
+    raster_file
 
     Returns
     -------
-    projected
+
+    """
+    with rio.open(raster_file) as src:
+        return np.array(src.read(1))
+
+
+def avg_calc(path_list, out_name):
     """
 
-    global projected
-    if epsg is not None:
-        projected = area.rio.reproject('EPSG:' + epsg)
+    Parameters
+    ----------
+    path_list
+    out_name
+
+    Returns
+    -------
+
+    """
+    import rasterio
+
+    lyr_list = [read_raster_array(x) for x in path_list]
+    array_out = np.mean(lyr_list, axis=0)
+
+    with rasterio.open(path_list[0]) as src:
+        meta = src.meta
+
+    meta.update(dtype=rasterio.float32)
+
+    # Write output file
+    with rasterio.open(out_name, 'w', **meta) as dst:
+        dst.write(array_out.astype(rasterio.float32), 1)
+
+    return array_out
+
+
+def visualize_raster(raster_lyr,
+                     bound,
+                     fig_name,
+                     path_to_fig,
+                     axes=False):
+    """
+    Parameters
+    ----------
+    raster_lyr
+    bound
+    fig_name
+    path_to_fig
+    axes
+
+    Returns
+    -------
+
+    """
+
+    # array_out_rio = rxr.open_rasterio('Climate_limits/resampled_py_height.tif')
+    array_out_rio = rxr.open_rasterio(raster_lyr)
+    #
+    f, ax = plt.subplots(figsize=(10, 4))
+
+    array_out_rio.plot(ax=ax)
+    bound.boundary.plot(ax=ax, color='black')
+    # bound.boundary.plot(ax=ax, color='black')
+
+    ax.set(title=fig_name)
+    if not axes:
+        ax.set_axis_off()
+    plt.show()
+
+    plt.savefig(path_to_fig)
+    plt.close()
+    print(fig_name + ' is plotted and saved')
+
+
+def calc_bp(data):
+    d = np.array(data)
+    dict_res = {'median': np.median(d), 'upper_quartile': np.percentile(d, 75),
+                'lower_quartile': np.percentile(d, 25)}
+
+    iqr = np.percentile(d, 75) - np.percentile(d, 25)
+
+    dict_res['iqr'] = iqr
+    dict_res['upper_whisker'] = d[d <= np.percentile(d, 75) + 1.5 * iqr].max()
+    dict_res['lower_whisker'] = d[d >= np.percentile(d, 25) - 1.5 * iqr].min()
+    return dict_res
+
+
+def plot_lines(x,
+               y,
+               x_lab,
+               y_lab,
+               title,
+               name, ):
+    plt.plot(x, y)
+    plt.xlabel(x_lab)
+    plt.ylabel(y_lab)
+
+    plt.grid()
+    # displaying the title
+    plt.title(title)
+    plt.savefig(name)
+    plt.show()
+    plt.close()
+
+
+def plt_scatter(var1, var2, var3,dat1, dat2, dat3,title,path_to_fig):
+    one = pd.DataFrame({var1: dat1.flatten(),
+                        var2: dat2.flatten(),
+                        var3: dat3.flatten()})
+    one.dropna()
+    one.round(decimals=1)
+    one.drop_duplicates()
+    t = one.groupby([var1, var2]).mean().reset_index()
+    fig, ax = plt.subplots()
+    plt.scatter(x=t[var1], y=t[var2], c=t[var3],
+        marker='s', s=0.1)
+    plt.xlabel(var1)
+    plt.ylabel(var2)
+    plt.title(title)
+    ax.set_xlabel(var1)
+    ax.set_ylabel(var2)
+    cbar = plt.colorbar()
+    cbar.set_label(var3)
+    plt.show()
+    plt.savefig(path_to_fig)
+    plt.close()
+
+# dirs = os.listdir('../../Documents/ForesiteProject/Data/GNN')
+# files= Forest_structure_lst
+files = os.listdir('GNN_AB2551')
+
+if 'GNN_AB2551' not in os.listdir():
+    os.mkdir('GNN_AB2551')
+
+extent = 'Extent/buffered_extent.shp'
+
+for file in files:
+    if file[-4:] == '.tif':
+        temp = pe.clip_to_extent(
+            area_file=os.path.join(
+                '../../Documents/ForesiteProject/Data/GNN/rasters', file),
+            extent_file=extent)
+        pe.write_raster(crs='EPSG:3310',
+            driver='GTiff',
+            file=temp,
+            f_name=file,
+            dir_name='GNN_AB2551')
+    print(file)
+    temp = None
+    gc.collect()
+
+
+# plot each of the forest structure layers
+GNN_files = os.listdir('GNN_AB2551')
+
+boundary = gpd.read_file('AB2551Watersheds/AB2551Watersheds.shp')
+for new_file in GNN_files:
+    if new_file[-4:] == '.tif':
+        visualize_raster(raster_lyr='GNN_AB2551/' + new_file,
+            bound=boundary,
+            fig_name=new_file[:-4],
+            path_to_fig='GNN_AB2551/' + new_file[:-4])
+    gc.collect()
+
+# call tmin avg
+tmin1 = glob(os.path.join(
+    '../../Documents/ForesiteProject/Data/Climate_data/',
+    'prism_tmin*12.tif'))
+
+tmin2 = glob(os.path.join(
+    '../../Documents/ForesiteProject/Data/Climate_data/',
+    'prism_tmin*01.tif'))
+tmin3 = glob(os.path.join(
+    '../../Documents/ForesiteProject/Data/Climate_data/',
+    'prism_tmin*02.tif'))
+
+tmin_list = tmin1 + tmin2 + tmin3
+tmin_avg = avg_calc(tmin_list, 'Climate_limits/prism_tmin_Dec_Feb.tif')
+
+pe.resample(in_file='Climate_limits/prism_tmin_Dec_Feb.tif',
+    dst_file='Climate_limits/resampled_py_prism_tmin.tif',
+    src_file='Extent/buffered_extent.tif',
+    snap=True)
+
+visualize_raster(raster_lyr='Climate_limits/resampled_py_prism_tmin.tif',
+    bound=boundary,
+    fig_name='Average Minimum Temperature(°C)',
+    path_to_fig='Graphics/resampled_py_prism_tmin')
+
+# call tmax avg
+tmax1 = glob(os.path.join(
+    '../../Documents/ForesiteProject/Data/Climate_data/',
+    'prism_tmax*06.tif'))
+
+tmax2 = glob(os.path.join(
+    '../../Documents/ForesiteProject/Data/Climate_data/',
+    'prism_tmax*07.tif'))
+tmax3 = glob(os.path.join(
+    '../../Documents/ForesiteProject/Data/Climate_data/',
+    'prism_tmax*08.tif'))
+
+tmax_list = tmax1 + tmax2 + tmax3
+tmax_avg = avg_calc(tmax_list, 'Climate_limits/prism_tmax_jun_aug.tif')
+pe.resample(in_file='Climate_limits/prism_tmax_jun_aug.tif',
+    dst_file='Climate_limits/resampled_py_prism_tmax.tif',
+    src_file='Extent/buffered_extent.tif',
+    snap=True)
+visualize_raster(raster_lyr='Climate_limits/resampled_py_prism_tmax.tif',
+    bound=boundary,
+    fig_name='Average Maximum Temperature(°C)',
+    path_to_fig='Graphics/resampled_py_prism_tmax')
+
+# call precip avg
+pecip_list = glob(os.path.join(
+    '../../Documents/ForesiteProject/Data/Climate_data/',
+    'prism_ppt*.tif'))
+precip_avg = avg_calc(pecip_list, 'Climate_limits/prism_ppt.tif')
+pe.resample(in_file='Climate_limits/prism_ppt.tif',
+    dst_file='Climate_limits/resampled_py_prism_ppt.tif',
+    src_file='Extent/buffered_extent.tif',
+    snap=True)
+visualize_raster(raster_lyr='Climate_limits/resampled_py_prism_ppt.tif',
+    bound=boundary,
+    fig_name='Average Precipitation(mm)',
+    path_to_fig='Graphics/resampled_py_prism_ppt')
+
+"""
+stndhgt_2017.tif: "average" Stand height, computed as average of heights of 
+all dominant
+and codominant trees (m/ha)
+--Sum tree height multiplied by TPH for dominant and codominant trees 
+(identified by the CROWN_CLASS field)
+HT_SUM = ∑ [TREE_LIVE.HT_M * TPH_FC] (for DBH_CM >= 2.5 and CROWN_CLASS <= 3)
+--Sum TPH for dominant and codominant trees
+TPH_SUM = ∑ TPH_FC (for DBH_CM >= 2.5 and CROWN_CLASS <= 3)
+--Divide sum of tree heights by TPH sum 
+
+
+ba_ge_3_2017.tif: Basal area of live trees >=2.5 cm dbh
+∑ TREE_LIVE.BAPH_FC (for DBH_CM >= 2.5) 
+
+mndbhba_2017.tif: Basal-area weighted mean diameter of all live trees(cm)
+--Sum basal area per hectare multiplied by DBH_CM for all live trees
+BAPH_DBH_SUM = ∑ [TREE_LIVE.BAPH_FC * DBH_CM] (for DBH_CM >= 2.5)
+--Sum basal area per hectare for all live trees
+BAPH_SUM = ∑ BAPH_FC (for DBH_CM >= 2.5)
+--Calculate basal-area weighted mean diameter
+MNDBHBA = BAPH_DBH_SUM / BAPH_SUM 
+Ref: LEMMA
+"""
+Forest_structure_lst = ['stndhgt_2017.tif', 'ba_ge_3_2017.tif',
+                        'mndbhba_2017.tif']
+
+pe.resample(in_file=os.path.join('GNN_AB2551',
+    Forest_structure_lst[0]),
+    dst_file='Climate_limits/resampled_py_height.tif',
+    src_file='Extent/buffered_extent.tif',
+    snap=True)
+visualize_raster(raster_lyr='Climate_limits/resampled_py_height.tif',
+    bound=boundary,
+    fig_name='Stand Height(m)',
+    path_to_fig='Graphics/resampled_py_height')
+
+pe.resample(in_file=os.path.join('GNN_AB2551',
+    Forest_structure_lst[1]),
+    dst_file='Climate_limits/resampled_py_basal.tif',
+    src_file='Extent/buffered_extent.tif',
+    snap=True)
+visualize_raster(raster_lyr='Climate_limits/resampled_py_basal.tif',
+    bound=boundary,
+    fig_name='Tree Basal Area(m^2/ha)',
+    path_to_fig='Graphics/resampled_py_basal')
+
+pe.resample(in_file=os.path.join('GNN_AB2551',
+    Forest_structure_lst[2]),
+    dst_file='Climate_limits/resampled_py_diameter.tif',
+    src_file='Extent/buffered_extent.tif',
+    snap=True)
+visualize_raster(raster_lyr='Climate_limits/resampled_py_diameter.tif',
+    bound=boundary,
+    fig_name='Basal-area weighted mean diameter(cm)',
+    path_to_fig='Graphics/resampled_py_diameter')
+
+max_temp = read_raster_array('Climate_limits/resampled_py_prism_tmax.tif')
+min_temp = read_raster_array('Climate_limits/resampled_py_prism_tmin.tif')
+precip = read_raster_array('Climate_limits/resampled_py_prism_ppt.tif')
+
+bhd = read_raster_array('Climate_limits/resampled_py_diameter.tif')
+basal = read_raster_array('Climate_limits/resampled_py_basal.tif')
+height = read_raster_array('Climate_limits/resampled_py_height.tif')
+
+dict_climate_struct = {'max_temp': max_temp.flatten(),
+                       'min_temp': min_temp.flatten(),
+                       'precipitation': precip.flatten(),
+                       'tree_diameter': bhd.flatten(),
+                       'basal_area': basal.flatten(),
+                       'tree_height': height.flatten()}
+
+climate_struct_df = pd.DataFrame(dict_climate_struct)
+
+dat = climate_struct_df.query('max_temp !=0 and min_temp!=0 and '
+                              'precipitation !=0 ')
+dat = dat.dropna()
+dat = dat[dat['tree_diameter'] > 0]
+dat = dat[dat['basal_area'] > 0]
+dat = dat[dat['tree_height'] > 0]
+
+new_dat = dat.round(decimals=2)
+unique_vals = new_dat.T.apply(lambda x: x.nunique(), axis=1)
+
+p_range_val = np.array(np.arange(round(np.min(new_dat.precipitation)),
+    round(np.max(new_dat.precipitation) + 1), 10))
+precip = {}
+per_vals = {}
+
+_t_dbh = {'median': 0.0, 'upper_quartile': 0.0, 'lower_quartile': 0.0,
+          'iqr': 0.0, 'upper_whisker': 0.0, 'lower_whisker': 0.0}
+_t_diam = {'median': 0.0, 'upper_quartile': 0.0, 'lower_quartile': 0.0,
+           'iqr': 0.0, 'upper_whisker': 0.0, 'lower_whisker': 0.0}
+_t_h = {'median': 0.0, 'upper_quartile': 0.0, 'lower_quartile': 0.0,
+        'iqr': 0.0, 'upper_whisker': 0.0, 'lower_whisker': 0.0}
+
+for i in p_range_val[:-1]:
+    tmp = new_dat[new_dat['precipitation'].between(i, i + 1, inclusive=True)]
+    # print(tmp)
+
+    precip['dbh_{}'.format(i)] = tmp.tree_diameter
+    precip['basal_{}'.format(i)] = tmp.basal_area
+    precip['h_{}'.format(i)] = tmp.tree_height
+
+    if len(tmp.tree_diameter) > 0:
+        _t_dbh = calc_bp(tmp.tree_diameter)
+        _t_diam = calc_bp(tmp.basal_area)
+        _t_h = calc_bp(tmp.tree_height)
 
     else:
-        try:
-            projected = area.rio.reproject(ref.crs)
-        except ValueError:
-            print("Set the reference file or epsg! Try again ...")
+        _t_dbh['upper_whisker'] = 0
+        _t_diam['upper_whisker'] = 0
+        _t_h['upper_whisker'] = 0
 
-    return projected
+    if 'precip' in per_vals:
+        per_vals['precip'].append(i)
+        per_vals['upper_whisk_dbh'].append(_t_dbh['upper_whisker'])
+        per_vals['upper_whisk_basal'].append(_t_diam['upper_whisker'])
+        per_vals['upper_whisk_height'].append(_t_h['upper_whisker'])
 
+    else:
+        per_vals['precip'] = [i]
+        per_vals['upper_whisk_dbh'] = [_t_dbh['upper_whisker']]
+        per_vals['upper_whisk_basal'] = [_t_diam['upper_whisker']]
+        per_vals['upper_whisk_height'] = [_t_h['upper_whisker']]
+    print(i)
 
-def clip_to_extent(area_file, extent_file):
-    """
-    This function reprojects the file to the extent and clips it to the polygon
-     that is passed to the function
+plot_lines(x=per_vals['precip'],
+    y=per_vals['upper_whisk_dbh'],
+    x_lab='Precipitation(mm)',
+    y_lab='Upper whisker of basal-area weighted mean diameter(cm)',
+    title='Basal-area weighted mean diameter limits vs. precipitation',
+    name='Graphics/dbh_prcp')
 
-    Parameters
-    ----------
-    area_file: rasterio object
-        the area that is desired to be clipped
-    extent_file: poly object
-        the extent based on which the area_file gets clipped
+plot_lines(x=per_vals['precip'],
+    y=per_vals['upper_whisk_basal'],
+    x_lab='Precipitation(mm)',
+    y_lab='Upper whisker of basal areas (m^2/ha)',
+    title='Basal area limits vs. precipitation',
+    name='Graphics/basal_prcp')
 
+plot_lines(x=per_vals['precip'],
+    y=per_vals['upper_whisk_height'],
+    x_lab='Precipitation(mm)',
+    y_lab='Upper whisker of average stand height in one hectare(m)',
+    title='Stand Height limits vs. precipitation',
+    name='Graphics/height_prcp')
 
-    Returns
-    -------
-    target_file_clipped: rio object
-        the clipped rio object
-    """
+min_temp_range_val = np.arange(round(np.min(new_dat.min_temp)),
+    round(np.max(new_dat.min_temp) + 1))
+min_t = {}
+min_t_vals = {}
+for i in min_temp_range_val[:-1]:
+    tmp = new_dat[new_dat['min_temp'].between(i, i + 1, inclusive=True)]
+    # print(tmp)
 
-    target_file = rxr.open_rasterio(area_file, masked=True)
-    clip_extent = gpd.read_file(extent_file)
-    target_file_proj = target_file.rio.reproject(clip_extent.crs)
-    target_file_clipped = \
-        target_file_proj.rio.clip(clip_extent.geometry.apply(mapping))
+    min_t['dbh_{}'.format(i)] = tmp.tree_diameter
+    min_t['basal_{}'.format(i)] = tmp.basal_area
+    min_t['h_{}'.format(i)] = tmp.tree_height
 
-    return target_file_clipped
+    _t_dbh = calc_bp(tmp.tree_diameter)
+    _t_diam = calc_bp(tmp.basal_area)
+    _t_h = calc_bp(tmp.tree_height)
 
+    if 'temp' in min_t_vals:
+        min_t_vals['temp'].append(i)
+        min_t_vals['upper_whisk_dbh'].append(_t_dbh['upper_whisker'])
+        min_t_vals['upper_whisk_basal'].append(_t_diam['upper_whisker'])
+        min_t_vals['upper_whisk_height'].append(_t_h['upper_whisker'])
 
-def write_raster(crs='EPSG:3310',
-                 file=None,
-                 driver='GTiff',
-                 f_name=None,
-                 dir_name=None,
-                 no_data=-9999):
-    """
-    Parameters
-    ----------
-    crs: str
-        string of desired a coordinate reference system identifier
-        or description , this string should be in format of EPSG:value
-    driver: str
-        the name of the desired format driver
-    file: rio file
-        rasterio file with attributes of raster data
-    f_name: str
-        the desired name to be assigned to the file
-    dir_name: str
-        the desired directory name for the file to be written to
-    no_data: num
-        Value assigned to nodata
+    else:
+        min_t_vals['temp'] = [i]
+        min_t_vals['upper_whisk_dbh'] = [_t_dbh['upper_whisker']]
+        min_t_vals['upper_whisk_basal'] = [_t_diam['upper_whisker']]
+        min_t_vals['upper_whisk_height'] = [_t_h['upper_whisker']]
+    print(i)
 
-    Returns
-    -------
+plot_lines(x=min_t_vals['temp'],
+    y=min_t_vals['upper_whisk_dbh'],
+    x_lab='Minimum temperature(°C)',
+    y_lab='Upper whisker of basal-area weighted mean diameter(cm)',
+    title='Basal-area weighted mean diameter limits in max temp',
+    name='Graphics/dbh_min_tmp')
 
-    """
-    dat_type = rio.float64
+plot_lines(x=min_t_vals['temp'],
+    y=min_t_vals['upper_whisk_basal'],
+    x_lab='Minimum temperature(°C)',
+    y_lab='Upper whisker of basal areas (m^2/ha)',
+    title='Basal area limits in max temp',
+    name='Graphics/basal_min_tmp')
 
-    if file.dtype == 'float64':
-        dat_type = rio.float64
-    elif file.dtype == 'float32':
-        dat_type = rio.float32
-    elif file.dtype == 'int32':
-        dat_type = rio.int32
-    elif file.dtype == 'int16':
-        dat_type = rio.int16
-    elif file.dtype == 'uint16':
-        dat_type = rio.uint16
-    elif file.dtype == 'int8':
-        dat_type = rio.int8
-    elif file.dtype == 'uint8':
-        dat_type = rio.uint8
+plot_lines(x=min_t_vals['temp'],
+    y=min_t_vals['upper_whisk_height'],
+    x_lab='Minimum temperature(°C)',
+    y_lab='Upper whisker of average stand height in one hectare(m)',
+    title='Stand Height limits in max temp',
+    name='Graphics/height_min_tmp')
 
-    out_meta = {'count': file.shape[0],
-                'crs': crs,
-                'dtype': dat_type,
-                'height': file.shape[1],
-                'width': file.shape[2],
-                'driver': driver,
-                'transform': file.rio.transform(),
-                'nodata': no_data}
+max_temp_range_val = np.arange(round(np.min(new_dat.max_temp)),
+    round(np.max(new_dat.max_temp) + 1))
+max_t = {}
+max_t_vals = {}
+for i in max_temp_range_val[:-1]:
+    tmp = new_dat[new_dat['max_temp'].between(i, i + 1, inclusive=True)]
+    # print(tmp)
 
-    if f_name not in dir_name:
-        with rio.open(dir_name + '/' + f_name, 'w', **out_meta) \
-                as dst:
-            dst.write(file)
-            print(f_name + ' is written to ' + dir_name)
+    max_t['dbh_{}'.format(i)] = tmp.tree_diameter
+    max_t['basal_{}'.format(i)] = tmp.basal_area
+    max_t['h_{}'.format(i)] = tmp.tree_height
 
+    _t_dbh = calc_bp(tmp.tree_diameter)
+    _t_diam = calc_bp(tmp.basal_area)
+    _t_h = calc_bp(tmp.tree_height)
 
-def raster_extent(boundary,
-                  extent_out,
-                  driver='GTiff',
-                  dtype=rio.uint8,
-                  width=1000,
-                  height=1000,
-                  crs='EPSG:3310',
-                  shape_from_bounds=True,
-                  res=(30.0, 30.0)):
-    """
+    if 'temp' in max_t_vals:
+        max_t_vals['temp'].append(i)
+        max_t_vals['upper_whisk_dbh'].append(_t_dbh['upper_whisker'])
+        max_t_vals['upper_whisk_basal'].append(_t_diam['upper_whisker'])
+        max_t_vals['upper_whisk_height'].append(_t_h['upper_whisker'])
 
-    Parameters
-    ----------
-    boundary: shp
-        boundary vector data     
-    extent_out: str
-        name of out file
-    driver: str
-        driver
-    dtype: rio dtype
-        out data type
-    width: int
-        width of the temp/adjustable
-    height: int
-        height of the temp/adjustable
-    crs: str
-        crs of the out file
-    shape_from_bounds: boolean
-        if the shepe should be created using the boundary
-    res: tuple
-        our resolution
+    else:
+        max_t_vals['temp'] = [i]
+        max_t_vals['upper_whisk_dbh'] = [_t_dbh['upper_whisker']]
+        max_t_vals['upper_whisk_basal'] = [_t_diam['upper_whisker']]
+        max_t_vals['upper_whisk_height'] = [_t_h['upper_whisker']]
+    print(i)
 
-    Returns
-    -------
+plot_lines(x=max_t_vals['temp'],
+    y=max_t_vals['upper_whisk_dbh'],
+    x_lab='Maximum temperature(°C)',
+    y_lab='Upper whisker of basal-area weighted mean diameter(cm)',
+    title='Basal-area weighted mean diameter limits in max temp',
+    name='Graphics/dbh_max_tmp')
 
-    """""
+plot_lines(x=max_t_vals['temp'],
+    y=max_t_vals['upper_whisk_basal'],
+    x_lab='Maximum temperature(°C)',
+    y_lab='Upper whisker of basal areas (m^2/ha)',
+    title='Basal area limits in max temp',
+    name='Graphics/basal_max_tmp')
 
-    # Load boundary
-    df = gpd.read_file(boundary)
-
-    in_shape = width, height
-
-    # use bounds to designate a shape of 1m resolution
-    if shape_from_bounds:
-        bounds = df.total_bounds
-        in_shape = round((bounds[3] - bounds[1]) / 30), \
-                   round((bounds[2] - bounds[0]) / 30)
-
-        height = in_shape[0]
-        width = in_shape[1]
-
-    transform = from_bounds(*df.total_bounds, width, height)
-
-    rasterized_dat = rasterize(
-        [(shape, 1) for shape in df['geometry']],
-        out_shape=in_shape,
-        fill=0,
-        transform=transform,
-        all_touched=False,
-        dtype=rio.uint8)
-
-    with rio.open(
-            'temp.tif',
-            'w',
-            driver=driver,
-            dtype=dtype,
-            count=1,
-            width=width,
-            height=height,
-            transform=transform,
-            crs=crs
-    ) as dst:
-        dst.write(rasterized_dat, indexes=1)
-
-    target_file_clipped = clip_to_extent('temp.tif',
-        boundary)
-    write_raster(crs='EPSG:3310',
-        driver='GTiff',
-        file=target_file_clipped,
-        f_name='new_temp.tif',
-        dir_name='.')
-
-    resample(in_file='new_temp.tif',
-        dst_file=extent_out,
-        new_res=res,
-        crs=crs)
-
-    os.remove('temp.tif')
-    os.remove('new_temp.tif')
+plot_lines(x=max_t_vals['temp'],
+    y=max_t_vals['upper_whisk_height'],
+    x_lab='Maximum temperature(°C)',
+    y_lab='Upper whisker of average stand height in one hectare(m/ha)',
+    title='Stand Height limits in max temp',
+    name='Graphics/height_max_tmp')
 
 
-def resample(in_file,
-             dst_file,
-             src_file=None,
-             new_res=(30, 30),
-             crs='EPSG:3310',
-             snap=False):
-    """
+plt_scatter(var1='minimum temperature(°C)',
+    var2='precipitation(mm)',
+    var3='tree diameter(cm)',
+    dat1=np.array(min_temp),
+    dat2=np.array(precip),
+    dat3=np.array(bhd),
+    title='precipitation and minimum temperature vs tree diameter',
+    path_to_fig='Graphics/p_mint_d')
 
-    Parameters
-    ----------
-    in_file: str
-        name of the tif file to be projected
-    dst_file: str
-        name of the destination file
-    src_file
-    new_res: tuple
-        new resolution
-    crs: str
-        String in form of EPSG:3310
-    snap
+plt_scatter(var1='max_temp',
+    var2='precipitation',
+    var3='tree_diameter(cm)',
+    dat1=max_temp, dat2=precip, dat3=bhd,
+    title='precipitation and maximum temperature vs tree diameter',
+    path_to_fig='Graphics/p_maxt_d')
 
-    Returns
-    -------
+plt_scatter(var1='minimum temperature(°C)',
+    var2='precipitation(mm)',
+    var3='basal area(m^2/ha)',
+    dat1=np.array(min_temp),
+    dat2=np.array(precip),
+    dat3=basal,
+    title='Precipitation and minimum temperature vs tree basal area',
+    path_to_fig='Graphics/p_mint_b')
 
-    """
+plt_scatter(var1='maximum temperature(°C)',
+    var2='precipitation(mm)',
+    var3='basal area(m^2/ha)',
+    dat1=max_temp, dat2=precip, dat3=basal,
+    title='precipitation and maximum temperature vs basal area',
+    path_to_fig='Graphics/p_maxt_b')
 
-    # in_file = 'Climate_limits/prism_tmin_Dec_Feb.tif'
-    # dst_file = 'Climate_limits/resampled_py_prism_tmin.tif'
-    # src_file = 'Extent/buffered_extent.tif'
-    # snap = True
-    # read the source raster
-    with rio.open(in_file) as src:
-        array = src.read()
-        old_resolution = src.res
-        aff = src.transform
+plt_scatter(var1='minimum temperature(°C)',
+    var2='precipitation(mm)',
+    var3='tree height(m/ha)',
+    dat1=np.array(min_temp), dat2=np.array(precip), dat3=height,
+    title='precipitation and minimum temperature vs tree height',
+    path_to_fig='Graphics/p_mint_h')
 
-        if snap:
-            with rio.open(src_file) as src_dat:
-                new_aff = aligned_target(transform=src.transform,
-                    width=src_dat.shape[1],
-                    height=src_dat.shape[0],
-                    resolution=src_dat.res)
-                # x_res_ratio = old_resolution[0] / src_dat.res[0]
-                # y_res_ratio = old_resolution[1] / src_dat.res[1]
-                new_aff = new_aff[0]
-                new_array = np.empty(shape=(
-                    array.shape[0], *src_dat.shape))
+plt_scatter(var1='maximum temperature(°C)',
+    var2='precipitation(mm)',
+    var3='tree height(m/ha)',
+    dat1=max_temp, dat2=precip, dat3=height,
+    title='precipitation and maximum temperature vs tree height',
+    path_to_fig='Graphics/p_maxt_h')
 
-        else:
-            new_res = new_res
-            # setup the transform to change the resolution
-            x_res_ratio = old_resolution[0] / new_res[0]
-            y_res_ratio = old_resolution[1] / new_res[1]
-            new_aff = affine.Affine(aff.a / x_res_ratio, aff.b, aff.c, aff.d,
-                                    aff.e / y_res_ratio, aff.f)
-
-            new_array = np.empty(shape=(
-                array.shape[0], int(round(array.shape[1] * x_res_ratio)),
-                int(round(array.shape[2] * y_res_ratio))))
-
-        new_array = reproject(array,
-            new_array,
-            src_transform=aff,
-            dst_transform=new_aff,
-            src_crs=src.crs,
-            dst_crs=crs,
-            count=1,
-            resample=Resampling.bilinear)
-
-        # write results to file
-        with rio.open(dst_file,
-                'w',
-                driver=src.driver,
-                height=new_array[0].shape[1],
-                width=new_array[0].shape[2],
-                nodata=src.nodata,
-                dtype=src.dtypes[0],
-                count=1,
-                crs=crs,
-                transform=new_aff) as dst:
-            dst.write(new_array[0])
-
-
-if __name__ == '__main__':
-    shp_file = 'AB2551Watersheds/AB2551Watersheds.shp'
-    shape = gpd.read_file(shp_file)
-    data = SetExtent(shape)
-    extent_w_buffer = data.create_buffered_extent(10000, epsg=3310)
-    extent = data.create_extent(epsg=3310)
-    if 'Extent' not in os.listdir():
-        os.mkdir('Extent')
-    extent_w_buffer.to_file('Extent/buffered_extent.shp')
-    extent.to_file('Extent/extent.shp')
-    raster_extent(boundary='Extent/buffered_extent.shp',
-        extent_out='Extent/buffered_extent.tif')
-    raster_extent(boundary='Extent/extent.shp',
-        extent_out='Extent/extent.tif')
-    
