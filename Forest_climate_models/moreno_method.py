@@ -15,6 +15,7 @@ __status__ = "Draft"
 import sys
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import rasterio
 import rioxarray as rxr
 import rasterio as rio
 import gc
@@ -26,6 +27,8 @@ from glob import glob
 sys.path.append('Data_prep')
 
 import project_extent as pe
+
+boundary = gpd.read_file('AB2551Watersheds/AB2551Watersheds.shp')
 
 # TODO add the params
 # TODO  complete the code documentation
@@ -65,7 +68,7 @@ def avg_calc(path_list, out_name):
     with rasterio.open(path_list[0]) as src:
         meta = src.meta
 
-    meta.update(dtype=rasterio.float32)
+    meta.update(dtype=rasterio.float32,crs='EPSG:3310')
 
     # Write output file
     with rasterio.open(out_name, 'w', **meta) as dst:
@@ -74,11 +77,59 @@ def avg_calc(path_list, out_name):
     return array_out
 
 
+def annual_avg(path_list,years,month_list_1,month_list_2,out_name):
+    '''
+
+    Parameters
+    ----------
+    path_list
+    years
+    month_list_1
+    month_list_2
+    out_name
+
+    Returns
+    -------
+
+    '''
+
+    import rasterio
+
+    lyrs=[]
+
+    for year in years:
+        globals()[f'list_{year}'] = [x for x in path_list if
+                                    (x[-10:-6] == '%d' % (year-1) and
+                                    x[-6:-4] in month_list_1) or
+                                    (x[-10:-6] == '%d' % year and
+                                    x[-6:-4] in month_list_2)]
+        lyr_list = [read_raster_array(x) for x in globals()['list_{year}']]
+        globals()[f'array_out_{year}'] = np.sum(lyr_list, axis=0)
+        lyrs.append(globals()[f'array_out_{year}'])
+        print(year)
+
+    average_precip = np.mean(lyrs, axis=0)
+    with rasterio.open(path_list[0]) as src:
+        meta = src.meta
+
+    meta.update(dtype=rasterio.float32,crs='EPSG:3310')
+
+    # Write output file
+    with rasterio.open(out_name, 'w', **meta) as dst:
+        dst.write(average_precip.astype(rasterio.float32), 1)
+
+    return average_precip
+
+
 def visualize_raster(raster_lyr,
                      bound,
                      fig_name,
                      path_to_fig,
-                     axes=False):
+                     axes=False,
+                     min_lim=float("NaN"),
+                     max_lim=float("NaN"),
+                     cmap=None,
+                     dpi=300):
     """
     Parameters
     ----------
@@ -87,6 +138,10 @@ def visualize_raster(raster_lyr,
     fig_name
     path_to_fig
     axes
+    min_lim
+    max_lim
+    cmap
+    dpi
 
     Returns
     -------
@@ -95,19 +150,26 @@ def visualize_raster(raster_lyr,
 
     # array_out_rio = rxr.open_rasterio('Climate_limits/resampled_py_height.tif')
     array_out_rio = rxr.open_rasterio(raster_lyr)
-    #
+
+    if ~np.isnan(min_lim):
+        array_out_rio.data[array_out_rio.data < min_lim] = min_lim
+    if ~np.isnan(max_lim):
+        array_out_rio.data[array_out_rio.data < max_lim] = max_lim
+
     f, ax = plt.subplots(figsize=(10, 4))
 
-    array_out_rio.plot(ax=ax)
+    if cmap is not None:
+        array_out_rio.plot(ax=ax, cmap=cmap)
+    else:
+        array_out_rio.plot(ax=ax)
     bound.boundary.plot(ax=ax, color='black')
-    # bound.boundary.plot(ax=ax, color='black')
 
     ax.set(title=fig_name)
     if not axes:
         ax.set_axis_off()
     plt.show()
 
-    plt.savefig(path_to_fig)
+    plt.savefig(path_to_fig, dpi=dpi)
     plt.close()
     print(fig_name + ' is plotted and saved')
 
@@ -130,7 +192,22 @@ def plot_lines(x,
                x_lab,
                y_lab,
                title,
-               name, ):
+               name,
+               dpi=300):
+    """
+    Parameters
+    ----------
+    x
+    y
+    x_lab
+    y_lab
+    title
+    name
+    dpi
+    Returns
+    -------
+
+    """
     plt.plot(x, y)
     plt.xlabel(x_lab)
     plt.ylabel(y_lab)
@@ -138,12 +215,31 @@ def plot_lines(x,
     plt.grid()
     # displaying the title
     plt.title(title)
-    plt.savefig(name)
+    plt.savefig(name,dpi=dpi)
     plt.show()
     plt.close()
 
 
-def plt_scatter(var1, var2, var3,dat1, dat2, dat3,title,path_to_fig):
+def plt_scatter(var1, var2, var3, dat1, dat2, dat3,
+                title, path_to_fig, dpi=300):
+    """
+
+    Parameters
+    ----------
+    var1
+    var2
+    var3
+    dat1
+    dat2
+    dat3
+    title
+    path_to_fig
+    dpi
+
+    Returns
+    -------
+
+    """
     one = pd.DataFrame({var1: dat1.flatten(),
                         var2: dat2.flatten(),
                         var3: dat3.flatten()})
@@ -152,8 +248,10 @@ def plt_scatter(var1, var2, var3,dat1, dat2, dat3,title,path_to_fig):
     one.drop_duplicates()
     t = one.groupby([var1, var2]).mean().reset_index()
     fig, ax = plt.subplots()
+    plt.grid(linestyle=':', linewidth='0.5', color='black')
+    ax.grid(which='minor', linestyle=':', linewidth='0.5')
     plt.scatter(x=t[var1], y=t[var2], c=t[var3],
-        marker='s', s=0.1)
+        marker='o', s=0.5, edgecolors='none')
     plt.xlabel(var1)
     plt.ylabel(var2)
     plt.title(title)
@@ -162,62 +260,53 @@ def plt_scatter(var1, var2, var3,dat1, dat2, dat3,title,path_to_fig):
     cbar = plt.colorbar()
     cbar.set_label(var3)
     plt.show()
-    plt.savefig(path_to_fig)
+    plt.savefig(path_to_fig, dpi=dpi)
     plt.close()
 
-# dirs = os.listdir('../../Documents/ForesiteProject/Data/GNN')
-# files= Forest_structure_lst
-files = os.listdir('GNN_AB2551')
-
-if 'GNN_AB2551' not in os.listdir():
-    os.mkdir('GNN_AB2551')
-
-extent = 'Extent/buffered_extent.shp'
-
-for file in files:
-    if file[-4:] == '.tif':
-        temp = pe.clip_to_extent(
-            area_file=os.path.join(
-                '../../Documents/ForesiteProject/Data/GNN/rasters', file),
-            extent_file=extent)
-        pe.write_raster(crs='EPSG:3310',
-            driver='GTiff',
-            file=temp,
-            f_name=file,
-            dir_name='GNN_AB2551')
-    print(file)
-    temp = None
-    gc.collect()
+    print(title + ' plotted to '+ path_to_fig)
 
 
-# plot each of the forest structure layers
-GNN_files = os.listdir('GNN_AB2551')
 
-boundary = gpd.read_file('AB2551Watersheds/AB2551Watersheds.shp')
-for new_file in GNN_files:
-    if new_file[-4:] == '.tif':
-        visualize_raster(raster_lyr='GNN_AB2551/' + new_file,
-            bound=boundary,
-            fig_name=new_file[:-4],
-            path_to_fig='GNN_AB2551/' + new_file[:-4])
-    gc.collect()
+def rescale_LEMMA(file_name, out_name, scaler):
+    """
+
+    Parameters
+    ----------
+    file_name
+    out_name
+    scaler
+
+    Returns
+    -------
+
+    """
+    import rasterio
+
+    file = read_raster_array(file_name)
+    array_out = file / scaler
+    import rasterio
+
+    with rasterio.open(file_name) as src:
+        meta = src.meta
+
+    meta.update(dtype=rasterio.float32, crs='EPSG:3310')
+
+    # Write output file
+    with rasterio.open(out_name, 'w', **meta) as dst:
+        dst.write(array_out.astype(rasterio.float32), 1)
+
+    print('file %s is rescales to 1/%d and saved to %s'%(file_name ,scaler
+    ,out_name))
 
 # call tmin avg
-tmin1 = glob(os.path.join(
+tmin = glob(os.path.join(
     '../../Documents/ForesiteProject/Data/Climate_data/',
-    'prism_tmin*12.tif'))
+    'prism_tmin*.tif'))
 
-tmin2 = glob(os.path.join(
-    '../../Documents/ForesiteProject/Data/Climate_data/',
-    'prism_tmin*01.tif'))
-tmin3 = glob(os.path.join(
-    '../../Documents/ForesiteProject/Data/Climate_data/',
-    'prism_tmin*02.tif'))
+tmin_list = tmin
+tmin_avg = avg_calc(tmin_list, 'Climate_limits/prism_tmin.tif')
 
-tmin_list = tmin1 + tmin2 + tmin3
-tmin_avg = avg_calc(tmin_list, 'Climate_limits/prism_tmin_Dec_Feb.tif')
-
-pe.resample(in_file='Climate_limits/prism_tmin_Dec_Feb.tif',
+pe.resample(in_file='Climate_limits/prism_tmin.tif',
     dst_file='Climate_limits/resampled_py_prism_tmin.tif',
     src_file='Extent/buffered_extent.tif',
     snap=True)
@@ -225,56 +314,69 @@ pe.resample(in_file='Climate_limits/prism_tmin_Dec_Feb.tif',
 visualize_raster(raster_lyr='Climate_limits/resampled_py_prism_tmin.tif',
     bound=boundary,
     fig_name='Average Minimum Temperature(°C)',
-    path_to_fig='Graphics/resampled_py_prism_tmin')
+    path_to_fig='Graphics/resampled_py_prism_tmin',
+    cmap='coolwarm')
 
 # call tmax avg
-tmax1 = glob(os.path.join(
+tmax = glob(os.path.join(
     '../../Documents/ForesiteProject/Data/Climate_data/',
-    'prism_tmax*06.tif'))
+    'prism_tmax*.tif'))
+tmax_list = tmax
+tmax_avg = avg_calc(tmax_list, 'Climate_limits/prism_tmax.tif')
 
-tmax2 = glob(os.path.join(
-    '../../Documents/ForesiteProject/Data/Climate_data/',
-    'prism_tmax*07.tif'))
-tmax3 = glob(os.path.join(
-    '../../Documents/ForesiteProject/Data/Climate_data/',
-    'prism_tmax*08.tif'))
-
-tmax_list = tmax1 + tmax2 + tmax3
-tmax_avg = avg_calc(tmax_list, 'Climate_limits/prism_tmax_jun_aug.tif')
-pe.resample(in_file='Climate_limits/prism_tmax_jun_aug.tif',
+pe.resample(in_file='Climate_limits/prism_tmax.tif',
     dst_file='Climate_limits/resampled_py_prism_tmax.tif',
     src_file='Extent/buffered_extent.tif',
     snap=True)
-visualize_raster(raster_lyr='Climate_limits/resampled_py_prism_tmax.tif',
+
+visualize_raster(raster_lyr='Climate_limits/prism_tmax.tif',
     bound=boundary,
     fig_name='Average Maximum Temperature(°C)',
-    path_to_fig='Graphics/resampled_py_prism_tmax')
+    path_to_fig='Graphics/resampled_py_prism_tmax',
+    cmap='YlOrRd')
 
 # call precip avg
-pecip_list = glob(os.path.join(
+percip_list = glob(os.path.join(
     '../../Documents/ForesiteProject/Data/Climate_data/',
     'prism_ppt*.tif'))
-precip_avg = avg_calc(pecip_list, 'Climate_limits/prism_ppt.tif')
-pe.resample(in_file='Climate_limits/prism_ppt.tif',
-    dst_file='Climate_limits/resampled_py_prism_ppt.tif',
+
+month_list_1 = ['10', '11', '12']
+month_list_2 = ['01', '02','03', '04', '05', '06', '07', '08', '09']
+years = np.arange(1982, 2020, 1)
+
+precip = annual_avg(percip_list,
+                    years,
+                    month_list_1,
+                    month_list_1,
+                    'Climate_limits/prism_ppt_annual.tif')
+
+pe.resample(in_file='Climate_limits/prism_ppt_annual.tif',
+    dst_file='Climate_limits/resampled_py_prism_ppt_annual.tif',
     src_file='Extent/buffered_extent.tif',
     snap=True)
-visualize_raster(raster_lyr='Climate_limits/resampled_py_prism_ppt.tif',
+
+visualize_raster(raster_lyr='Climate_limits/resampled_py_prism_ppt_annual.tif',
     bound=boundary,
     fig_name='Average Precipitation(mm)',
-    path_to_fig='Graphics/resampled_py_prism_ppt')
+    path_to_fig='Graphics/resampled_py_prism_ppt_wy',
+    cmap='YlGnBu')
+
 
 """
+  Attribute        Year  Filename                  Scalar  Number of neighbors
+  BA_GE_3          2017  ba_ge_3_2017.tif          100.0   7    
+  MNDBHBA          2017  mndbhba_2017.tif          10.0    7    
+  STNDHGT          2017  stndhgt_2017.tif          100.0   7  
+  
 stndhgt_2017.tif: "average" Stand height, computed as average of heights of 
-all dominant
-and codominant trees (m/ha)
+all dominant and codominant trees (m)
 --Sum tree height multiplied by TPH for dominant and codominant trees 
 (identified by the CROWN_CLASS field)
 HT_SUM = ∑ [TREE_LIVE.HT_M * TPH_FC] (for DBH_CM >= 2.5 and CROWN_CLASS <= 3)
 --Sum TPH for dominant and codominant trees
 TPH_SUM = ∑ TPH_FC (for DBH_CM >= 2.5 and CROWN_CLASS <= 3)
 --Divide sum of tree heights by TPH sum 
-
+STNDHGT = HT_SUM / TPH_SUM 
 
 ba_ge_3_2017.tif: Basal area of live trees >=2.5 cm dbh
 ∑ TREE_LIVE.BAPH_FC (for DBH_CM >= 2.5) 
@@ -286,48 +388,70 @@ BAPH_DBH_SUM = ∑ [TREE_LIVE.BAPH_FC * DBH_CM] (for DBH_CM >= 2.5)
 BAPH_SUM = ∑ BAPH_FC (for DBH_CM >= 2.5)
 --Calculate basal-area weighted mean diameter
 MNDBHBA = BAPH_DBH_SUM / BAPH_SUM 
+
 Ref: LEMMA
 """
 Forest_structure_lst = ['stndhgt_2017.tif', 'ba_ge_3_2017.tif',
                         'mndbhba_2017.tif']
+
 
 pe.resample(in_file=os.path.join('GNN_AB2551',
     Forest_structure_lst[0]),
     dst_file='Climate_limits/resampled_py_height.tif',
     src_file='Extent/buffered_extent.tif',
     snap=True)
-visualize_raster(raster_lyr='Climate_limits/resampled_py_height.tif',
+
+
+rescale_LEMMA(file_name='Climate_limits/resampled_py_height.tif',
+              out_name='Climate_limits/tree_height.tif',
+              scaler=100)
+
+visualize_raster(raster_lyr='Climate_limits/tree_height.tif',
     bound=boundary,
     fig_name='Stand Height(m)',
-    path_to_fig='Graphics/resampled_py_height')
+    path_to_fig='Graphics/tree_height',
+    min_lim=0,
+    cmap='Greens')
+
 
 pe.resample(in_file=os.path.join('GNN_AB2551',
     Forest_structure_lst[1]),
     dst_file='Climate_limits/resampled_py_basal.tif',
     src_file='Extent/buffered_extent.tif',
     snap=True)
-visualize_raster(raster_lyr='Climate_limits/resampled_py_basal.tif',
+rescale_LEMMA(file_name='Climate_limits/resampled_py_basal.tif',
+              out_name='Climate_limits/basal_area.tif',
+              scaler=100)
+visualize_raster(raster_lyr='Climate_limits/basal_area.tif',
     bound=boundary,
     fig_name='Tree Basal Area(m^2/ha)',
-    path_to_fig='Graphics/resampled_py_basal')
+    path_to_fig='Graphics/basal_area',
+    min_lim=0,
+    cmap='YlGn')
 
 pe.resample(in_file=os.path.join('GNN_AB2551',
     Forest_structure_lst[2]),
     dst_file='Climate_limits/resampled_py_diameter.tif',
     src_file='Extent/buffered_extent.tif',
     snap=True)
-visualize_raster(raster_lyr='Climate_limits/resampled_py_diameter.tif',
+rescale_LEMMA(file_name='Climate_limits/resampled_py_diameter.tif',
+              out_name='Climate_limits/tree_diameter.tif',
+              scaler=10)
+visualize_raster(raster_lyr='Climate_limits/tree_diameter.tif',
     bound=boundary,
     fig_name='Basal-area weighted mean diameter(cm)',
-    path_to_fig='Graphics/resampled_py_diameter')
+    path_to_fig='Graphics/tree_diameter',
+    min_lim=0,
+    cmap='BuGn')
+
 
 max_temp = read_raster_array('Climate_limits/resampled_py_prism_tmax.tif')
 min_temp = read_raster_array('Climate_limits/resampled_py_prism_tmin.tif')
-precip = read_raster_array('Climate_limits/resampled_py_prism_ppt.tif')
+precip = read_raster_array('Climate_limits/resampled_py_prism_ppt_annual.tif')
 
-bhd = read_raster_array('Climate_limits/resampled_py_diameter.tif')
-basal = read_raster_array('Climate_limits/resampled_py_basal.tif')
-height = read_raster_array('Climate_limits/resampled_py_height.tif')
+bhd = read_raster_array('Climate_limits/tree_diameter.tif')
+basal = read_raster_array('Climate_limits/basal_area.tif')
+height = read_raster_array('Climate_limits/tree_height.tif')
 
 dict_climate_struct = {'max_temp': max_temp.flatten(),
                        'min_temp': min_temp.flatten(),
@@ -340,6 +464,7 @@ climate_struct_df = pd.DataFrame(dict_climate_struct)
 
 dat = climate_struct_df.query('max_temp !=0 and min_temp!=0 and '
                               'precipitation !=0 ')
+
 dat = dat.dropna()
 dat = dat[dat['tree_diameter'] > 0]
 dat = dat[dat['basal_area'] > 0]
@@ -348,8 +473,15 @@ dat = dat[dat['tree_height'] > 0]
 new_dat = dat.round(decimals=2)
 unique_vals = new_dat.T.apply(lambda x: x.nunique(), axis=1)
 
+#t = Averaging moving window
+t = 20
+
+# p_range_val = np.array(np.arange(round(np.min(new_dat.precipitation)),
+#     round(np.max(new_dat.precipitation))))
+
 p_range_val = np.array(np.arange(round(np.min(new_dat.precipitation)),
-    round(np.max(new_dat.precipitation) + 1), 10))
+    round(np.max(new_dat.precipitation)+1), 10))
+
 precip = {}
 per_vals = {}
 
@@ -360,8 +492,9 @@ _t_diam = {'median': 0.0, 'upper_quartile': 0.0, 'lower_quartile': 0.0,
 _t_h = {'median': 0.0, 'upper_quartile': 0.0, 'lower_quartile': 0.0,
         'iqr': 0.0, 'upper_whisker': 0.0, 'lower_whisker': 0.0}
 
-for i in p_range_val[:-1]:
-    tmp = new_dat[new_dat['precipitation'].between(i, i + 1, inclusive=True)]
+for i in p_range_val:
+    tmp = new_dat[new_dat['precipitation'].between(i - t/2, i + t/2,
+        inclusive=True)]
     # print(tmp)
 
     precip['dbh_{}'.format(i)] = tmp.tree_diameter
@@ -389,6 +522,7 @@ for i in p_range_val[:-1]:
         per_vals['upper_whisk_dbh'] = [_t_dbh['upper_whisker']]
         per_vals['upper_whisk_basal'] = [_t_diam['upper_whisker']]
         per_vals['upper_whisk_height'] = [_t_h['upper_whisker']]
+    # print(_t_dbh['upper_whisker'])
     print(i)
 
 plot_lines(x=per_vals['precip'],
@@ -445,21 +579,21 @@ plot_lines(x=min_t_vals['temp'],
     y=min_t_vals['upper_whisk_dbh'],
     x_lab='Minimum temperature(°C)',
     y_lab='Upper whisker of basal-area weighted mean diameter(cm)',
-    title='Basal-area weighted mean diameter limits in max temp',
+    title='Basal-area weighted mean diameter limits in min temp',
     name='Graphics/dbh_min_tmp')
 
 plot_lines(x=min_t_vals['temp'],
     y=min_t_vals['upper_whisk_basal'],
     x_lab='Minimum temperature(°C)',
     y_lab='Upper whisker of basal areas (m^2/ha)',
-    title='Basal area limits in max temp',
+    title='Basal area limits in min temp',
     name='Graphics/basal_min_tmp')
 
 plot_lines(x=min_t_vals['temp'],
     y=min_t_vals['upper_whisk_height'],
     x_lab='Minimum temperature(°C)',
     y_lab='Upper whisker of average stand height in one hectare(m)',
-    title='Stand Height limits in max temp',
+    title='Stand Height limits in min temp',
     name='Graphics/height_min_tmp')
 
 max_temp_range_val = np.arange(round(np.min(new_dat.max_temp)),
@@ -512,6 +646,14 @@ plot_lines(x=max_t_vals['temp'],
     title='Stand Height limits in max temp',
     name='Graphics/height_max_tmp')
 
+
+max_temp = read_raster_array('Climate_limits/resampled_py_prism_tmax.tif')
+min_temp = read_raster_array('Climate_limits/resampled_py_prism_tmin.tif')
+precip = read_raster_array('Climate_limits/resampled_py_prism_ppt_annual.tif')
+
+bhd = read_raster_array('Climate_limits/tree_diameter.tif')
+basal = read_raster_array('Climate_limits/basal_area.tif')
+height = read_raster_array('Climate_limits/tree_height.tif')
 
 plt_scatter(var1='minimum temperature(°C)',
     var2='precipitation(mm)',
