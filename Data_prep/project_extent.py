@@ -25,7 +25,9 @@ from rasterio.transform import from_bounds
 import affine
 from rasterio.warp import reproject, Resampling, aligned_target
 import numpy as np
-
+import matplotlib.pyplot as plt
+import rioxarray as rxr
+import rasterio as rio
 
 class SetExtent:
     """ SetExtent includes creates extent shapefiles
@@ -233,7 +235,7 @@ def raster_extent(boundary,
                   shape_from_bounds=True,
                   res=(30.0, 30.0)):
     """
-    
+
     Parameters
     ----------
     boundary: shp
@@ -268,8 +270,8 @@ def raster_extent(boundary,
     # use bounds to designate a shape of 1m resolution
     if shape_from_bounds:
         bounds = df.total_bounds
-        in_shape = round((bounds[3] - bounds[1])/30), \
-                   round((bounds[2] - bounds[0])/30)
+        in_shape = round((bounds[3] - bounds[1]) / 30), \
+                   round((bounds[2] - bounds[0]) / 30)
 
         height = in_shape[0]
         width = in_shape[1]
@@ -321,7 +323,6 @@ def resample(in_file,
              crs='EPSG:3310',
              snap=False):
     """
-
     Parameters
     ----------
     in_file: str
@@ -334,10 +335,8 @@ def resample(in_file,
     crs: str
         String in form of EPSG:3310
     snap
-
     Returns
     -------
-
     """
 
     # in_file = 'Climate_limits/prism_tmin_Dec_Feb.tif'
@@ -399,6 +398,146 @@ def resample(in_file,
 
 
 
+def visualize_raster(raster_lyr,
+                     bound,
+                     fig_name,
+                     path_to_fig,
+                     axes=False,
+                     min_lim=float("NaN"),
+                     max_lim=float("NaN"),
+                     cmap=None,
+                     dpi=300):
+    """
+    Parameters
+    ----------
+    raster_lyr
+    bound
+    fig_name
+    path_to_fig
+    axes
+    min_lim
+    max_lim
+    cmap
+    dpi
+
+    Returns
+    -------
+
+    """
+
+    # array_out_rio = rxr.open_rasterio('Climate_limits/resampled_py_height.tif')
+    array_out_rio = rxr.open_rasterio(raster_lyr)
+
+    if ~np.isnan(min_lim):
+        array_out_rio.data[array_out_rio.data < min_lim] = min_lim
+    if ~np.isnan(max_lim):
+        array_out_rio.data[array_out_rio.data < max_lim] = max_lim
+
+    f, ax = plt.subplots(figsize=(10, 4))
+
+    if cmap is not None:
+        array_out_rio.plot(ax=ax, cmap=cmap)
+    else:
+        array_out_rio.plot(ax=ax)
+    bound.boundary.plot(ax=ax, color='black')
+
+    ax.set(title=fig_name)
+    if not axes:
+        ax.set_axis_off()
+    plt.show()
+
+    plt.savefig(path_to_fig, dpi=dpi)
+    plt.close()
+    print(fig_name + ' is plotted and saved')
+
+
+def read_raster_array(raster_file):
+    """
+
+    Parameters
+    ----------
+    raster_file
+
+    Returns
+    -------
+
+    """
+    with rio.open(raster_file) as src:
+        return np.array(src.read(1))
+
+
+def avg_calc(path_list, out_name):
+    """
+
+    Parameters
+    ----------
+    path_list
+    out_name
+
+    Returns
+    -------
+
+    """
+    import rasterio
+
+    lyr_list = [read_raster_array(x) for x in path_list]
+    array_out = np.mean(lyr_list, axis=0)
+
+    with rasterio.open(path_list[0]) as src:
+        meta = src.meta
+
+    meta.update(dtype=rasterio.float32,crs='EPSG:3310')
+
+    # Write output file
+    with rasterio.open(out_name, 'w', **meta) as dst:
+        dst.write(array_out.astype(rasterio.float32), 1)
+
+    return array_out
+
+
+def annual_avg(path_list, years, month_list_1, month_list_2, out_name):
+    """
+
+    Parameters
+    ----------
+    path_list
+    years
+    month_list_1
+    month_list_2
+    out_name
+
+    Returns
+    -------
+
+    """
+
+
+    import rasterio
+
+    lyrs =[]
+
+    for year in years:
+        globals()[f'list_{year}'] = [x for x in path_list if
+                                    (x[-10:-6] == '%d' % (year-1) and
+                                    x[-6:-4] in month_list_1) or
+                                    (x[-10:-6] == '%d' % year and
+                                    x[-6:-4] in month_list_2)]
+        lyr_list = [read_raster_array(x) for x in globals()['list_{year}']]
+        globals()[f'array_out_{year}'] = np.sum(lyr_list, axis=0)
+        lyrs.append(globals()[f'array_out_{year}'])
+        print(year)
+
+    average_precip = np.mean(lyrs, axis=0)
+    with rasterio.open(path_list[0]) as src:
+        meta = src.meta
+
+    meta.update(dtype=rasterio.float32,crs='EPSG:3310')
+
+    # Write output file
+    with rasterio.open(out_name, 'w', **meta) as dst:
+        dst.write(average_precip.astype(rasterio.float32), 1)
+
+    return average_precip
 
 if __name__ == '__main__':
     shp_file = 'AB2551Watersheds/AB2551Watersheds.shp'
